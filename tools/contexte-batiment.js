@@ -43,14 +43,17 @@ async function fetchGeorisques(ban) {
   const radonData = radon.ok ? (radon.data?.data?.[0] ?? radon.data?.results?.[0]) : null;
   const seismoData = seismo.ok ? (seismo.data?.data?.[0] ?? seismo.data?.results?.[0]) : null;
   const icpeItems = icpe.ok ? (icpe.data?.data ?? icpe.data?.results ?? []) : [];
+  const catnatAll = catnatItems.map((r) => ({ libelle: r.libelle_risque_jo ?? r.libelle, date_debut: r.date_debut_evt ?? r.date_debut }));
 
   return {
     pprn: pprItems.filter((r) => (r.type_risque ?? r.libelle ?? '').toUpperCase().includes('N')).map((r) => ({ libelle: r.libelle, etat: r.etat })),
     pprt: pprItems.filter((r) => (r.type_risque ?? r.libelle ?? '').toUpperCase().includes('T')).map((r) => ({ libelle: r.libelle, etat: r.etat })),
-    catnat: catnatItems.map((r) => ({ libelle: r.libelle_risque_jo ?? r.libelle, date_debut: r.date_debut_evt ?? r.date_debut })),
+    catnat: catnatAll,
+    catnat_recents: catnatAll.slice(0, 5),
     radon: radonData ? `Catégorie ${radonData.classe_potentiel ?? radonData.potentiel_radon ?? '?'}` : null,
     sismicite: seismoData ? seismoData.zone_sismicite ?? `Zone ${seismoData.code_zone}` : null,
     icpe_proximite: icpeItems.length,
+    icpe_liste: icpeItems.slice(0, 5).map((i) => ({ nom: i.raisonSociale ?? i.nom, statut: i.etatActivite ?? i.etat_activite })),
     errors,
   };
 }
@@ -122,6 +125,7 @@ export async function contexteBatimentHandler({ adresse }) {
   if (!cadastreData.ok) errors.push({ source: 'cadastre', reason: cadastreData.reason ?? 'ERREUR' });
 
   const pluData = pluRes.status === 'fulfilled' ? pluRes.value : { ok: false, reason: 'ERREUR' };
+  // ok:false = erreur réseau/API ; ok:true avec zone:null = PLU absent du GPU (pas une erreur)
   if (!pluData.ok) errors.push({ source: 'plu', reason: pluData.reason ?? 'ERREUR' });
 
   const banOut = {
@@ -143,6 +147,9 @@ export async function contexteBatimentHandler({ adresse }) {
     zone: pluData.ok ? pluData.zone : null,
     libelle_zone: pluData.ok ? pluData.libelle_zone : null,
     lien_reglement: pluData.ok ? pluData.lien_reglement : null,
+    message: pluData.ok && !pluData.zone
+      ? `PLU non versé au Géoportail Urbanisme pour ${ban.commune} — consulter la mairie ou l'EPCI`
+      : null,
   };
 
   const digestData = { adresse_input: adresse, ban: banOut, cadastre: cadastreOut, georisques, plu: pluOut, errors };
@@ -156,10 +163,12 @@ export async function contexteBatimentHandler({ adresse }) {
       ? {
           pprn: georisques.pprn,
           pprt: georisques.pprt,
-          catnat: georisques.catnat,
+          catnat_recents: georisques.catnat_recents,
+          catnat_total: georisques.catnat?.length ?? 0,
           radon: georisques.radon,
           sismicite: georisques.sismicite,
           icpe_proximite: georisques.icpe_proximite,
+          icpe_liste: georisques.icpe_liste,
         }
       : null,
     plu: pluOut,
