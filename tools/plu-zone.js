@@ -3,6 +3,18 @@ import { fetchWithTimeout } from './shared/fetch-with-timeout.js';
 
 const GPU_BASE = 'https://apicarto.ign.fr/api/gpu';
 
+async function safeGpuJson(url, label) {
+  try {
+    const res = await fetchWithTimeout(url);
+    if (res.status === 404) return { ok: false, label, missing: true };
+    if (!res.ok) return { ok: false, label, reason: `HTTP ${res.status}` };
+    const json = await res.json();
+    return { ok: true, label, features: json.features ?? [] };
+  } catch (err) {
+    return { ok: false, label, reason: err.message.startsWith('TIMEOUT') ? 'TIMEOUT' : err.message };
+  }
+}
+
 export async function pluZoneHandler({ adresse }) {
   const t0 = Date.now();
 
@@ -15,74 +27,49 @@ export async function pluZoneHandler({ adresse }) {
 
   const geom = encodeURIComponent(JSON.stringify({ type: 'Point', coordinates: [ban.lon, ban.lat] }));
 
-  const [zoneRes, prescRes, servRes] = await Promise.allSettled([
-    fetchWithTimeout(`${GPU_BASE}/zone-urba?geom=${geom}`),
-    fetchWithTimeout(`${GPU_BASE}/prescription-surf?geom=${geom}`),
-    fetchWithTimeout(`${GPU_BASE}/acte-sup?geom=${geom}`),
+  const [zoneRes, prescRes, servRes] = await Promise.all([
+    safeGpuJson(`${GPU_BASE}/zone-urba?geom=${geom}`, 'gpu/zone-urba'),
+    safeGpuJson(`${GPU_BASE}/prescription-surf?geom=${geom}`, 'gpu/prescription-surf'),
+    safeGpuJson(`${GPU_BASE}/acte-sup?geom=${geom}`, 'gpu/acte-sup'),
   ]);
 
   const errors = [];
+  if (!zoneRes.ok && !zoneRes.missing) errors.push({ source: zoneRes.label, reason: zoneRes.reason });
+  if (!prescRes.ok && !prescRes.missing) errors.push({ source: prescRes.label, reason: prescRes.reason });
+  if (!servRes.ok && !servRes.missing) errors.push({ source: servRes.label, reason: servRes.reason });
 
-  async function parseFeatures(settled, label) {
-    if (settled.status === 'rejected') {
-      errors.push({ source: label, reason: settled.reason?.message ?? 'ERREUR' });
-      return [];
-    }
-    const res = settled.value;
-    if (!res.ok) {
-      errors.push({ source: label, reason: `HTTP ${res.status}` });
-      return [];
-    }
-    try {
-      const json = await res.json();
-      return json.features ?? [];
-    } catch {
-      errors.push({ source: label, reason: 'PARSE_ERROR' });
-      return [];
-    }
-  }
-
-  const [zones, prescriptions, servitudes] = await Promise.all([
-    parseFeatures(zoneRes, 'gpu/zone-urba'),
-    parseFeatures(prescRes, 'gpu/prescription-surf'),
-    parseFeatures(servRes, 'gpu/acte-sup'),
-  ]);
-
-  const zone = zones[0]?.properties ?? null;
+  const zoneFeature = zoneRes.ok ? zoneRes.features[0]?.properties ?? null : null;
+  const prescriptions = prescRes.ok
+    ? prescRes.features.slice(0, 10).map((f) => ({ libelle: f.properties?.libelle, type: f.properties?.typepsc }))
+    : [];
+  const servitudes = servRes.ok
+    ? servRes.features.slice(0, 10).map((f) => ({ libelle: f.properties?.libelle, type: f.properties?.typesas ?? f.properties?.type }))
+    : [];
 
   const result = {
     source: 'GPU / Géoportail Urbanisme',
     adresse_input: adresse,
     ban: { label: ban.label, lat: ban.lat, lon: ban.lon, score: ban.score },
-    zone: zone
+    zone: zoneFeature
       ? {
-          type_zone: zone.typezone ?? zone.libelle,
-          libelle_zone: zone.libelong ?? zone.lib_type_zone,
-          partition: zone.partition,
-          lien_reglement: zone.urlfic ?? null,
+          type_zone: zoneFeature.typezone ?? zoneFeature.libelle,
+          libelle_zone: zoneFeature.libelong ?? zoneFeature.lib_type_zone,
+          partition: zoneFeature.partition,
+          lien_reglement: zoneFeature.urlfic ?? null,
         }
       : null,
-    prescriptions: prescriptions.slice(0, 10).map((f) => ({
-      libelle: f.properties?.libelle,
-      type: f.properties?.typepsc,
-    })),
-    servitudes: servitudes.slice(0, 10).map((f) => ({
-      libelle: f.properties?.libelle,
-      type: f.properties?.typesas ?? f.properties?.type,
-    })),
+    message: !zoneFeature
+      ? `Le PLU/PLUi de cette commune n'est pas encore versé au Géoportail Urbanisme. Consulter directement la mairie ou l'EPCI compétent : https://www.geoportail-urbanisme.gouv.fr`
+      : undefined,
+    prescriptions,
+    servitudes,
     errors: errors.length ? errors : undefined,
   };
-
-  // PLU absent du GPU
-  if (!zone) {
-    result.message = "Le PLU/PLUi de cette commune n'est pas encore versé au Géoportail Urbanisme. "
-      + "Consulter directement la mairie ou l'EPCI compétent : https://www.geoportail-urbanisme.gouv.fr";
-  }
 
   console.log(JSON.stringify({
     tool: 'plu_zone',
     duration_ms: Date.now() - t0,
-    ok: !!zone,
+    ok: !!zoneFeature,
     errors_count: errors.length,
   }));
 
