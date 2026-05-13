@@ -14,15 +14,14 @@ async function safeGet(url, label) {
   }
 }
 
-function extractPPR(data, type) {
-  const items = data?.data ?? data?.results ?? [];
-  return items
-    .filter((r) => !type || (r.type_risque ?? r.libelle ?? '').toUpperCase().includes(type))
-    .map((r) => ({
-      libelle: r.libelle ?? r.type_risque ?? r.type,
-      etat: r.etat ?? r.statut,
-      date_approbation: r.date_approbation ?? r.date,
-    }));
+// Paris (75101-75120) → 75056, Lyon (69381-69389) → 69123, Marseille (13201-13216) → 13055
+// BAN geocodes arrondissements with their own INSEE, but Georisques only has data at commune level.
+function communeInsee(inseeFromBan) {
+  const s = String(inseeFromBan);
+  if (/^751[01]\d$/.test(s)) return '75056'; // Paris 1e-20e
+  if (/^6938[1-9]$/.test(s)) return '69123'; // Lyon 1er-9e
+  if (/^132[01]\d$/.test(s)) return '13055'; // Marseille 1er-16e
+  return s;
 }
 
 export async function georisquesCommuneHandler({ adresse }) {
@@ -35,8 +34,8 @@ export async function georisquesCommuneHandler({ adresse }) {
     return JSON.stringify({ source: 'Géorisques', adresse_input: adresse, error: err.message });
   }
 
-  const insee = ban.code_insee;
-  const latlon = `${ban.lon},${ban.lat}`;
+  const inseeRaw = ban.code_insee;
+  const insee = communeInsee(inseeRaw);
 
   const calls = await Promise.allSettled([
     safeGet(`${GEORISQUES}/gaspar/risques?code_insee=${insee}`, 'ppr'),
@@ -85,6 +84,7 @@ export async function georisquesCommuneHandler({ adresse }) {
     adresse_input: adresse,
     commune: ban.commune,
     code_insee: insee,
+    code_insee_ban: inseeRaw !== insee ? inseeRaw : undefined,
     pprn: pprn.map((r) => ({ libelle: r.libelle, etat: r.etat, date: r.date_approbation })),
     pprt: pprt.map((r) => ({ libelle: r.libelle, etat: r.etat, date: r.date_approbation })),
     catnat,
@@ -99,6 +99,7 @@ export async function georisquesCommuneHandler({ adresse }) {
     tool: 'georisques_commune',
     duration_ms: Date.now() - t0,
     code_insee: insee,
+    code_insee_raw: inseeRaw,
     errors_count: errors.length,
   }));
 

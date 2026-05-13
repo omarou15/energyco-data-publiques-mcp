@@ -18,7 +18,7 @@ export async function pluZoneHandler({ adresse }) {
   const [zoneRes, prescRes, servRes] = await Promise.allSettled([
     fetchWithTimeout(`${GPU_BASE}/zone-urba?geom=${geom}`),
     fetchWithTimeout(`${GPU_BASE}/prescription-surf?geom=${geom}`),
-    fetchWithTimeout(`${GPU_BASE}/servitude-surf?geom=${geom}`),
+    fetchWithTimeout(`${GPU_BASE}/acte-sup?geom=${geom}`),
   ]);
 
   const errors = [];
@@ -45,7 +45,7 @@ export async function pluZoneHandler({ adresse }) {
   const [zones, prescriptions, servitudes] = await Promise.all([
     parseFeatures(zoneRes, 'gpu/zone-urba'),
     parseFeatures(prescRes, 'gpu/prescription-surf'),
-    parseFeatures(servRes, 'gpu/servitude-surf'),
+    parseFeatures(servRes, 'gpu/acte-sup'),
   ]);
 
   const zone = zones[0]?.properties ?? null;
@@ -72,6 +72,12 @@ export async function pluZoneHandler({ adresse }) {
     })),
     errors: errors.length ? errors : undefined,
   };
+
+  // PLU absent du GPU
+  if (!zone) {
+    result.message = "Le PLU/PLUi de cette commune n'est pas encore versé au Géoportail Urbanisme. "
+      + "Consulter directement la mairie ou l'EPCI compétent : https://www.geoportail-urbanisme.gouv.fr";
+  }
 
   console.log(JSON.stringify({
     tool: 'plu_zone',

@@ -2,12 +2,23 @@ import { fetchWithTimeout } from './shared/fetch-with-timeout.js';
 
 const SIRENE_URL = 'https://recherche-entreprises.api.gouv.fr/search';
 
+// code_postal API param is unreliable — departement is stable and supported
+function deptFromCP(cp) {
+  const s = String(cp ?? '').replace(/\s/g, '');
+  if (!s) return null;
+  if (s.startsWith('97')) return s.slice(0, 3); // DOM-TOM: 971-976
+  if (s >= '20000' && s <= '20190') return '2A'; // Corse-du-Sud
+  if (s >= '20200' && s < '21000') return '2B'; // Haute-Corse
+  return s.slice(0, 2);
+}
+
 export async function sireneEntrepriseHandler({ query, code_postal }) {
   const t0 = Date.now();
 
   const url = new URL(SIRENE_URL);
   url.searchParams.set('q', query);
-  if (code_postal) url.searchParams.set('code_postal', code_postal);
+  const dept = deptFromCP(code_postal);
+  if (dept) url.searchParams.set('departement', dept);
   url.searchParams.set('per_page', '5');
 
   try {
@@ -38,6 +49,7 @@ export async function sireneEntrepriseHandler({ query, code_postal }) {
       source: 'Sirene / INSEE',
       query,
       code_postal: code_postal ?? null,
+      departement_filtre: dept ?? null,
       total: json.total_results ?? results.length,
       results,
     });
